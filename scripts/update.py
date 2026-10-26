@@ -8,6 +8,8 @@ import os
 import re
 import sys
 import urllib.request
+import ssl
+import time
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -112,6 +114,48 @@ def recent_539(content):
     return rows
 
 
+def official_tw539():
+    """Query Taiwan Lottery's public Daily539Result endpoint month by month."""
+    rows = []
+    context = ssl.create_default_context()
+    if hasattr(ssl, 'VERIFY_X509_STRICT'):
+        context.verify_flags &= ~ssl.VERIFY_X509_STRICT
+    for month in range(1, TODAY.month + 1):
+        url = ('https://api.taiwanlottery.com/TLCAPIWeB/Lottery/'
+               'Daily539Result?period&month=2026-%02d&pageSize=31' % month)
+        request = urllib.request.Request(url, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+            'Accept': 'application/json'})
+        last_error = None
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(request, timeout=20, context=context) as response:
+                    payload = json.loads(response.read().decode('utf-8-sig'))
+                break
+            except (OSError, ValueError) as error:
+                last_error = error
+                if attempt < 2:
+                    time.sleep(attempt + 1)
+        else:
+            raise RuntimeError('official 539 API month %02d: %s' % (month, last_error))
+        content = payload.get('content') or {}
+        monthly = content.get('daily539Res')
+        if not isinstance(monthly, list) or not monthly:
+            raise ValueError('official 539 API month %02d: no draw records' % month)
+        for item in monthly:
+            numbers = item.get('drawNumberSize')
+            if isinstance(numbers, str):
+                numbers = [int(n) for n in re.findall(r'\d+', numbers)]
+            if not isinstance(numbers, list) or len(numbers) < 5:
+                raise ValueError('unexpected official 539 numbers: %s' % item)
+            rows.append({'draw_no': str(item['period']),
+                         'draw_date': str(item['lotteryDate'])[:10],
+                         'numbers': numbers[:5], 'special': None})
+        print('tw539 month %02d: %d draws' % (month, len(monthly)), flush=True)
+        time.sleep(0.3)
+    return rows
+
+
 def fetch_rows(game):
     override = os.getenv(game.upper() + '_FEED_URL', '').strip()
     if override:
@@ -128,7 +172,7 @@ def fetch_rows(game):
         return rows
     if game == 'hk6':
         return hk_archive(fetch('https://lottery.hk/en/mark-six/results/2026'))
-    return recent_539(fetch('https://playsport539.com/lottery/539/'))
+    return official_tw539()
 
 
 def update(game):
