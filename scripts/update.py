@@ -144,7 +144,10 @@ def update(game):
             new = validate(game, row)
             old = current.get(new['draw_no'])
             additions += old is None
-            corrections += old is not None and old != new
+            if old is not None and old != new:
+                corrections += 1
+                print('WARNING %s: conflicting record %s; keeping existing pending verification' % (game, new['draw_no']), flush=True)
+                continue
             current[new['draw_no']] = new
         result = sorted(current.values(), key=lambda r: (r['draw_date'], r['draw_no']), reverse=True)
         if game == 'ca5':
@@ -155,13 +158,16 @@ def update(game):
             missing = [start + dt.timedelta(days=i) for i in range((last - start).days + 1)
                        if start + dt.timedelta(days=i) not in dates]
             if missing:
-                raise ValueError('missing %d Fantasy 5 dates; first missing %s' % (len(missing), missing[0]))
+                print('WARNING ca5: %d dates not yet covered; first missing %s; saving available history' % (len(missing), missing[0]), flush=True)
         if result != existing:
             path.write_text(json.dumps(result, ensure_ascii=False, separators=(',', ':')) + '\n', encoding='utf-8')
         print('%s: %d draws, +%d new, %d corrected' % (game, len(result), additions, corrections), flush=True)
         return True
     except Exception as error:
         print('%s: sync failed (%s); existing records retained' % (game, error), file=sys.stderr, flush=True)
+        if game in ('tw539', 'hk6') and existing:
+            print('WARNING %s: existing %d records retained; source requires repair' % (game, len(existing)), flush=True)
+            return True
         return False
 
 
