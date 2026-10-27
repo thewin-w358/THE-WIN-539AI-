@@ -3,6 +3,7 @@ name: Update Lottery Data
 on:
   workflow_dispatch:
   schedule:
+    - cron: '0 3 * * *'    # Taiwan time 11:00
     - cron: '0 13 * * *'   # Taiwan time 21:00
     - cron: '15 16 * * *'  # Taiwan time 00:15 (next day)
 
