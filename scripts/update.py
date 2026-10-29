@@ -12,6 +12,7 @@ import ssl
 import time
 from html.parser import HTMLParser
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[1] / 'data'
 GAMES = {'tw539': (39, 5, False), 'hk6': (49, 6, True), 'ca5': (39, 5, False)}
@@ -77,6 +78,68 @@ def ca_archive(content):
             rows.append({'draw_no': item, 'draw_date': item,
                          'numbers': [int(n) for n in match.groups()], 'special': None})
     return rows
+
+
+
+def ca_official_recent(content):
+    """Read recent Fantasy 5 results from California Lottery's official HTML.
+
+    The official page publishes only a rolling window; retain the historical
+    archive as the primary source and merge these records by draw date.
+    """
+    parser = TextBits()
+    parser.feed(content)
+    bits = parser.bits
+    month_names = {name.upper(): index for index, name in enumerate(
+        ('Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug',
+         'Sep', 'Oct', 'Nov', 'Dec'), 1)}
+    rows = []
+    for i, token in enumerate(bits):
+        m = re.fullmatch(r'([A-Za-z]{3})\s+(\d{1,2}),\s*(2026)', token)
+        if not m or m.group(1).upper() not in month_names:
+            continue
+        date = dt.date(int(m.group(3)), month_names[m.group(1).upper()],
+                       int(m.group(2))).isoformat()
+        nearby = bits[i + 1:i + 22]
+        draw_match = next((re.fullmatch(r'#\s*(\d{4,7})', b) for b in nearby
+                           if re.fullmatch(r'#\s*\d{4,7}', b)), None)
+        if not draw_match:
+            continue
+        # Only accept the first explicitly labelled five-number sequence.
+        number_start = next((j for j, b in enumerate(nearby)
+                             if b.lower().strip(': ') in ('winning numbers', '中獎號碼')), None)
+        if number_start is None:
+            continue
+        numbers = []
+        for b in nearby[number_start + 1:]:
+            if re.fullmatch(r'\d{1,2}', b):
+                numbers.append(int(b))
+                if len(numbers) == 5:
+                    break
+            elif numbers:
+                break
+        if len(numbers) == 5:
+            rows.append({'draw_no': date, 'draw_date': date,
+                         'numbers': numbers, 'special': None})
+    return rows
+
+
+def official_ca5_recent():
+    url = 'https://www.calottery.com/en/draw-games/fantasy-5'
+    last_error = None
+    for attempt in range(3):
+        try:
+            rows = ca_official_recent(fetch(url))
+            if not rows:
+                raise ValueError('official page had no parseable Fantasy 5 draws')
+            print('ca5 official: %d recent draws' % len(rows), flush=True)
+            return rows
+        except (OSError, ValueError) as error:
+            last_error = error
+            if attempt < 2:
+                time.sleep(attempt + 1)
+    print('WARNING ca5 official fallback unavailable: %s' % last_error, flush=True)
+    return []
 
 
 def hk_archive(content):
@@ -162,14 +225,28 @@ def fetch_rows(game):
         return parse_feed(fetch(override))
     if game == 'ca5':
         rows = []
-        for month in range(1, TODAY.month + 1):
+        ca_today = dt.datetime.now(ZoneInfo('America/Los_Angeles')).date()
+        for month in range(1, ca_today.month + 1):
             url = 'https://lotterypredictor.com/california/fantasy5/results?resultsdate=2026-%02d-01' % month
-            monthly = [r for r in ca_archive(fetch(url)) if int(r['draw_date'][5:7]) == month]
-            if not monthly:
-                raise ValueError('no Fantasy 5 results for month %02d; check page format' % month)
-            print('ca5 month %02d: %d draws' % (month, len(monthly)), flush=True)
-            rows.extend(monthly)
-        return rows
+            try:
+                monthly = [r for r in ca_archive(fetch(url)) if int(r['draw_date'][5:7]) == month]
+                if not monthly:
+                    raise ValueError('no parseable Fantasy 5 results')
+                print('ca5 month %02d: %d draws' % (month, len(monthly)), flush=True)
+                rows.extend(monthly)
+            except (OSError, ValueError) as error:
+                print('WARNING ca5 archive month %02d: %s' % (month, error), flush=True)
+        # Merge official recent draws; never fabricate missing draw results.
+        official = official_ca5_recent()
+        by_date = {r['draw_date']: r for r in rows}
+        for r in official:
+            if r['draw_date'] in by_date and sorted(r['numbers']) != sorted(by_date[r['draw_date']]['numbers']):
+                print('WARNING ca5: official result conflicts with archive for %s; using official result for new dates only' % r['draw_date'], flush=True)
+                continue
+            by_date[r['draw_date']] = r
+        if not by_date:
+            raise ValueError('both Fantasy 5 sources unavailable')
+        return list(by_date.values())
     if game == 'hk6':
         return hk_archive(fetch('https://lottery.hk/en/mark-six/results/2026'))
     return official_tw539()
@@ -197,7 +274,7 @@ def update(game):
         if game == 'ca5':
             start = dt.date(2026, 1, 1)
             # California drawing happens in local Pacific time; do not require today's result yet.
-            last = TODAY - dt.timedelta(days=1)
+            last = dt.datetime.now(ZoneInfo('America/Los_Angeles')).date() - dt.timedelta(days=1)
             dates = {dt.date.fromisoformat(r['draw_date']) for r in result}
             missing = [start + dt.timedelta(days=i) for i in range((last - start).days + 1)
                        if start + dt.timedelta(days=i) not in dates]
