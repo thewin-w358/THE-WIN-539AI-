@@ -82,46 +82,56 @@ def ca_archive(content):
 
 
 def ca_official_recent(content):
-    """Read recent Fantasy 5 results from California Lottery's official HTML.
+    """Parse dated Fantasy 5 results conservatively from official page text.
 
-    The official page publishes only a rolling window; retain the historical
-    archive as the primary source and merge these records by draw date.
+    Official HTML can change; never infer numbers without a dated, explicitly
+    labelled five-number result. An unparseable page remains a warning.
     """
     parser = TextBits()
     parser.feed(content)
     bits = parser.bits
-    month_names = {name.upper(): index for index, name in enumerate(
+    months = {name.lower(): i for i, name in enumerate(
         ('Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug',
          'Sep', 'Oct', 'Nov', 'Dec'), 1)}
-    rows = []
+    date_pattern = re.compile(r'([A-Za-z]{3})\s+(\d{1,2}),?\s+(2026)')
+    label_pattern = re.compile(r'(winning\s*numbers?|draw\s*results?)', re.I)
+    rows = {}
     for i, token in enumerate(bits):
-        m = re.fullmatch(r'([A-Za-z]{3})\s+(\d{1,2}),\s*(2026)', token)
-        if not m or m.group(1).upper() not in month_names:
+        match = date_pattern.fullmatch(token)
+        if not match or match.group(1).lower() not in months:
             continue
-        date = dt.date(int(m.group(3)), month_names[m.group(1).upper()],
-                       int(m.group(2))).isoformat()
-        nearby = bits[i + 1:i + 22]
-        draw_match = next((re.fullmatch(r'#\s*(\d{4,7})', b) for b in nearby
-                           if re.fullmatch(r'#\s*\d{4,7}', b)), None)
-        if not draw_match:
+        try:
+            day = dt.date(2026, months[match.group(1).lower()], int(match.group(2)))
+        except ValueError:
             continue
-        # Only accept the first explicitly labelled five-number sequence.
-        number_start = next((j for j, b in enumerate(nearby)
-                             if b.lower().strip(': ') in ('winning numbers', '中獎號碼')), None)
-        if number_start is None:
-            continue
-        numbers = []
-        for b in nearby[number_start + 1:]:
-            if re.fullmatch(r'\d{1,2}', b):
-                numbers.append(int(b))
-                if len(numbers) == 5:
-                    break
-            elif numbers:
+        # Stop at the next dated result to avoid combining two drawings.
+        nearby = []
+        for part in bits[i + 1:i + 35]:
+            if date_pattern.fullmatch(part):
                 break
-        if len(numbers) == 5:
-            rows.append({'draw_no': date, 'draw_date': date,
-                         'numbers': numbers, 'special': None})
-    return rows
+            nearby.append(part)
+        for j, part in enumerate(nearby):
+            if not label_pattern.search(part):
+                continue
+            tail = nearby[j + 1:j + 12]
+            nums = []
+            for item in tail:
+                # A comma/space-separated row or five individually rendered balls.
+                if re.fullmatch(r'\s*(?:\d{1,2}[,\s-]+){4}\d{1,2}\s*', item):
+                    nums = [int(x) for x in re.findall(r'\d+', item)]
+                    break
+                if re.fullmatch(r'\d{1,2}', item):
+                    nums.append(int(item))
+                    if len(nums) == 5:
+                        break
+                elif nums:
+                    break
+            if len(nums) == 5 and len(set(nums)) == 5 and all(1 <= n <= 39 for n in nums):
+                date = day.isoformat()
+                rows[date] = {'draw_no': date, 'draw_date': date,
+                              'numbers': nums, 'special': None}
+                break
+    return list(rows.values())
 
 
 def official_ca5_recent():
