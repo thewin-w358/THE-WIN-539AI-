@@ -73,7 +73,7 @@ def ca_archive(content):
         if not re.fullmatch(r'2026-\d{2}-\d{2}', item):
             continue
         near = ' '.join(bits[i + 1:i + 9])
-        match = re.search(r'\b(\d{1,2})\s*[,，]\s*(\d{1,2})\s*[,，]\s*(\d{1,2})\s*[,，]\s*(\d{1,2})\s*[,，]\s*(\d{1,2})\b', near)
+        match = re.search(r'\b(\d{1,2})\s*[,ï¼]\s*(\d{1,2})\s*[,ï¼]\s*(\d{1,2})\s*[,ï¼]\s*(\d{1,2})\s*[,ï¼]\s*(\d{1,2})\b', near)
         if match:
             rows.append({'draw_no': item, 'draw_date': item,
                          'numbers': [int(n) for n in match.groups()], 'special': None})
@@ -176,7 +176,7 @@ def recent_539(content):
     import html
     plain = html.unescape(re.sub(r'<[^>]+>', ' ', content))
     plain = re.sub(r'\s+', ' ', plain)
-    pattern = r'(\d{4}/\d{1,2}/\d{1,2})\s*(?:週[一二三四五六日])?\s*(115000\d{3})\s+((?:\d{1,2}\s+){4}\d{1,2})'
+    pattern = r'(\d{4}/\d{1,2}/\d{1,2})\s*(?:é±[ä¸äºä¸åäºå­æ¥])?\s*(115000\d{3})\s+((?:\d{1,2}\s+){4}\d{1,2})'
     rows = []
     for match in re.finditer(pattern, plain):
         try:
@@ -213,7 +213,12 @@ def official_tw539():
             raise RuntimeError('official 539 API month %02d: %s' % (month, last_error))
         content = payload.get('content') or {}
         monthly = content.get('daily539Res')
-        if not isinstance(monthly, list) or not monthly:
+        if not isinstance(monthly, list):
+            raise ValueError('official 539 API month %02d: unexpected response format' % month)
+        if not monthly:
+            if TODAY.year == 2026 and month == TODAY.month:
+                print('tw539 month %02d: no draws yet; skipping current month' % month, flush=True)
+                continue
             raise ValueError('official 539 API month %02d: no draw records' % month)
         for item in monthly:
             numbers = item.get('drawNumberSize')
